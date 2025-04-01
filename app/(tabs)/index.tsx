@@ -1,83 +1,170 @@
-import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, Text, SafeAreaView, KeyboardAvoidingView, Platform } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import TaskInput from '../../components/TaskInput';
-import TaskList from '../../components/TaskList';
+import React, { useState, useEffect, useCallback } from 'react';
+import { StyleSheet, View, Text, SafeAreaView, KeyboardAvoidingView, Platform, TouchableOpacity } from 'react-native';
+import TaskInput from '@/components/TaskInput';
+import TaskList from '@/components/TaskList';
+import { useAuth } from '@/contexts/AuthContext';
+import { db } from '@/firebase/config';
+import { 
+  collection, 
+  query, 
+  where, 
+  orderBy, 
+  onSnapshot, 
+  addDoc, 
+  updateDoc, 
+  deleteDoc, 
+  doc, 
+  serverTimestamp 
+} from 'firebase/firestore';
+import { User } from 'firebase/auth';
 
 import { HelloWave } from '@/components/HelloWave';
 import ParallaxScrollView from '@/components/ParallaxScrollView';
 import { ThemedText } from '@/components/ThemedText';
 import { ThemedView } from '@/components/ThemedView';
 
-const TaskApp = () => {
-  const [tasks, setTasks] = useState([]);
+// 型定義
+interface Task {
+  id: string;
+  text: string;
+  completed: boolean;
+  userId: string;
+  createdAt: any; // FirestoreのTimestamp型
+}
 
+// AuthContextの型を定義
+interface AuthContextType {
+  currentUser: User | null;
+  logout: () => Promise<void>;
+  login: (email: string, password: string) => Promise<any>;
+  signup: (email: string, password: string) => Promise<any>;
+}
+
+const TaskApp: React.FC = () => {
+  const [tasks, setTasks] = useState<Task[]>([]);
+  const [loading, setLoading] = useState(true);
+  const { currentUser, logout } = useAuth() || { 
+    currentUser: null, 
+    logout: async () => {} 
+  };
+  const user = currentUser as User | null;
+
+  // Firestoreからタスクを取得
   useEffect(() => {
-    loadTasks();
-  }, []);
+    if (!user?.uid) {
+      setLoading(false);
+      return;
+    }
 
-  useEffect(() => {
-    saveTasks();
-  }, [tasks]);
+    const tasksRef = collection(db, 'tasks');
+    const q = query(
+      tasksRef,
+      where('userId', '==', user.uid),
+      orderBy('createdAt', 'desc')
+    );
 
-  const loadTasks = async () => {
+    const unsubscribe = onSnapshot(q, 
+      (snapshot) => {
+        const taskList = snapshot.docs.map(doc => ({
+          id: doc.id,
+          ...doc.data()
+        })) as Task[];
+        setTasks(taskList);
+        setLoading(false);
+      }, 
+      () => setLoading(false)
+    );
+
+    return unsubscribe;
+  }, [user]);
+
+  // タスクを追加
+  const addTask = useCallback(async (text: string) => {
+    if (!text.trim() || !user?.uid) return;
+    
     try {
-      const storedTasks = await AsyncStorage.getItem('@tasks_key');
-      if (storedTasks !== null) {
-        setTasks(JSON.parse(storedTasks));
+      await addDoc(collection(db, 'tasks'), {
+        text,
+        completed: false,
+        userId: user.uid,
+        createdAt: serverTimestamp()
+      });
+    } catch (error) {
+      // エラー処理は静かに失敗
+    }
+  }, [user]);
+
+  // タスクの完了状態を切り替え
+  const toggleTask = useCallback(async (id: string) => {
+    try {
+      const task = tasks.find(t => t.id === id);
+      if (task) {
+        await updateDoc(doc(db, 'tasks', id), {
+          completed: !task.completed
+        });
       }
     } catch (error) {
-      console.log('タスクの読み込みに失敗しました', error);
+      // エラー処理は静かに失敗
     }
-  };
+  }, [tasks]);
 
-  const saveTasks = async () => {
+  // タスクを削除
+  const deleteTask = useCallback(async (id: string) => {
     try {
-      await AsyncStorage.setItem('@tasks_key', JSON.stringify(tasks));
+      await deleteDoc(doc(db, 'tasks', id));
     } catch (error) {
-      console.log('タスクの保存に失敗しました', error);
+      // エラー処理は静かに失敗
     }
-  };
+  }, []);
 
-  const addTask = (text) => {
-    if (text.trim().length === 0) return;
-    
-    const newTask = {
-      id: Date.now().toString(),
-      text: text,
-      completed: false,
-    };
-    
-    setTasks([...tasks, newTask]);
-  };
+  // ログアウト処理
+  const handleLogout = useCallback(async () => {
+    try {
+      await logout();
+    } catch (error) {
+      // エラー処理は静かに失敗
+    }
+  }, [logout]);
 
-  const toggleTask = (id) => {
-    setTasks(
-      tasks.map(task => 
-        task.id === id ? { ...task, completed: !task.completed } : task
-      )
-    );
-  };
+  // タスクが空の場合のコンポーネント
+  const EmptyTaskList = () => (
+    <View style={styles.emptyContainer}>
+      <Text style={styles.emptyText}>タスクがありません</Text>
+      <Text style={styles.emptySubText}>新しいタスクを追加してください</Text>
+    </View>
+  );
 
-  const deleteTask = (id) => {
-    setTasks(tasks.filter(task => task.id !== id));
-  };
+  // ローディング中のコンポーネント
+  const LoadingIndicator = () => (
+    <View style={styles.loadingContainer}>
+      <Text>読み込み中...</Text>
+    </View>
+  );
 
   return (
-    <SafeAreaView style={styles.taskAppContainer}>
+    <SafeAreaView style={styles.container}>
       <KeyboardAvoidingView 
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        style={styles.taskAppContainer}
+        style={styles.container}
       >
         <View style={styles.header}>
           <Text style={styles.title}>タスクリスト</Text>
+          <TouchableOpacity onPress={handleLogout} style={styles.logoutButton}>
+            <Text style={styles.logoutButtonText}>ログアウト</Text>
+          </TouchableOpacity>
         </View>
         
-        <TaskList 
-          tasks={tasks} 
-          onToggle={toggleTask} 
-          onDelete={deleteTask} 
-        />
+        {loading ? (
+          <LoadingIndicator />
+        ) : tasks.length > 0 ? (
+          <TaskList 
+            tasks={tasks} 
+            onToggle={toggleTask} 
+            onDelete={deleteTask} 
+          />
+        ) : (
+          <EmptyTaskList />
+        )}
         
         <TaskInput onAddTask={addTask} />
       </KeyboardAvoidingView>
@@ -85,46 +172,57 @@ const TaskApp = () => {
   );
 };
 
-export default function TabOneScreen() {
-  return (
-    <View style={styles.container}>
-      <TaskApp />
-    </View>
-  );
+export default function TaskScreen() {
+  return <TaskApp />;
 }
 
 const styles = StyleSheet.create({
-  titleContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  stepContainer: {
-    gap: 8,
-    marginBottom: 8,
-  },
-  reactLogo: {
-    height: 178,
-    width: 290,
-    bottom: 0,
-    left: 0,
-    position: 'absolute',
-  },
   container: {
     flex: 1,
-  },
-  taskAppContainer: {
-    flex: 1,
+    backgroundColor: '#f5f5f5',
   },
   header: {
     padding: 20,
     backgroundColor: '#ffffff',
     borderBottomWidth: 1,
     borderBottomColor: '#e0e0e0',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
   },
   title: {
     fontSize: 24,
     fontWeight: 'bold',
     color: '#333',
+  },
+  logoutButton: {
+    padding: 8,
+    backgroundColor: '#f44336',
+    borderRadius: 4,
+  },
+  logoutButtonText: {
+    color: 'white',
+    fontWeight: 'bold',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  emptyText: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#888',
+  },
+  emptySubText: {
+    fontSize: 14,
+    color: '#888',
+    marginTop: 8,
   },
 });

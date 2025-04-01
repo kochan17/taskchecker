@@ -1,13 +1,16 @@
 import React from 'react';
 import { StyleSheet, View, StatusBar } from 'react-native';
-import TaskApp from './components/TaskApp';
+import { AuthProvider } from '@/contexts/AuthContext';
+import Navigation from '@/navigation';
 
 export default function App() {
   return (
-    <View style={styles.container}>
-      <StatusBar barStyle="dark-content" />
-      <TaskApp />
-    </View>
+    <AuthProvider>
+      <View style={styles.container}>
+        <StatusBar barStyle="dark-content" />
+        <Navigation />
+      </View>
+    </AuthProvider>
   );
 }
 
